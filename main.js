@@ -1,125 +1,276 @@
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+"use strict";
 
-const build_color = "#bcdbf9"
-const goal_color  = "#f19191"
+let canvas = document.getElementById("canvas");
+let gl = canvas.getContext("webgl");
 
+let heap_counter = 0;
+let heap = {};
+let inst;
+
+function add_object(obj)
 {
-	const r = 0.529 * 256;
-	const g = 0.741 * 256;
-	const b = 0.945 * 256;
-	canvas.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+	let id = heap_counter++;
+	heap[id] = obj;
+	return id;
 }
 
-ctx.translate(300, 400);
-ctx.scale(0.4, 0.4)
+function get_object(id)
+{
+	return heap[id];
+}
 
-async function main() {
-	const import_object = {
-		'env': { 'log': console.log }
-	};
-	const module = await WebAssembly.instantiateStreaming(
-		fetch("fcsim.wasm"), import_object
-	);
-	const instance = module.instance;
+function make_view(data, size)
+{
+	return new DataView(inst.exports.memory.buffer, data, size);
+}
 
-	instance.exports.memory.grow(100);
+function make_string(data, size)
+{
+	let decoder = new TextDecoder();
+	return decoder.decode(make_view(data, size));
+}
 
-	const xml_res = await fetch("galois.xml");
-	const xml_buf = await xml_res.arrayBuffer();
-	const xml = new Uint8Array(xml_buf);
+function make_cstring(data)
+{
+	let size = inst.exports.strlen(data);
+	return make_string(data, size);
+}
 
-	const xml_c_ptr = instance.exports.malloc(xml.length + 1);
-	const xml_c_arr = new Uint8Array(
-		instance.exports.memory.buffer,
-		xml_c_ptr,
-		xml.length + 1
-	);
-	xml_c_arr.set(xml);
+let gl_env = {
+	glAttachShader(program, shader) {
+		gl.attachShader(get_object(program), get_object(shader));
+	},
 
-	const arena_c_ptr = instance.exports.malloc(72);
-	const res = instance.exports.fcsim_read_xml(xml_c_ptr, arena_c_ptr);
-	if (res)
-		return;
-	const handle_c_ptr = instance.exports.fcsim_new(arena_c_ptr);
+	glBindBuffer(target, buffer) {
+		return gl.bindBuffer(target, get_object(buffer));
+	},
 
-	// for (let i = 0; i < 1000; i++)
-	setInterval(() => {
-		instance.exports.fcsim_step(handle_c_ptr);
+	glBufferData(target, size, data, usage) {
+		gl.bufferData(target, make_view(data, size), usage);
+	},
 
-	const view = new DataView(instance.exports.memory.buffer);
+	glBufferSubData(target, offset, size, data) {
+		gl.bufferSubData(target, offset, make_view(data, size));
+	},
 
-	const blocks_c_ptr = view.getUint32(arena_c_ptr, true);
-	const block_cnt = view.getUint32(arena_c_ptr + 4, true);
-	const build_x = view.getFloat64(arena_c_ptr + 8, true);
-	const build_y = view.getFloat64(arena_c_ptr + 16, true);
-	const build_w = view.getFloat64(arena_c_ptr + 24, true);
-	const build_h = view.getFloat64(arena_c_ptr + 32, true);
-	const goal_x = view.getFloat64(arena_c_ptr + 40, true);
-	const goal_y = view.getFloat64(arena_c_ptr + 48, true);
-	const goal_w = view.getFloat64(arena_c_ptr + 56, true);
-	const goal_h = view.getFloat64(arena_c_ptr + 64, true);
+	glClear(mask) {
+		gl.clear(mask);
+	},
 
-	ctx.clearRect(-2000, -2000, 20000, 20000);
+	glClearColor(red, green, blue, alpha) {
+		gl.clearColor(red, green, blue, alpha);
+	},
 
-	const build_l = build_x - build_w / 2;
-	const build_b = build_y - build_h / 2;
-	ctx.fillStyle = build_color;
-	ctx.fillRect(build_l, build_b, build_w, build_h);
-	
-	const goal_l = goal_x - goal_w / 2;
-	const goal_b = goal_y - goal_h / 2;
-	ctx.fillStyle = goal_color;
-	ctx.fillRect(goal_l, goal_b, goal_w, goal_h);
+	glCompileShader(shader) {
+		gl.compileShader(get_object(shader));
+	},
 
-	for (let i = 0; i < block_cnt; i++) {
-		const off = blocks_c_ptr + i * 64;
-		const type = view.getUint32(off, true);
-		const id = view.getInt32(off + 4, true);
-		const x = view.getFloat64(off + 8, true);
-		const y = view.getFloat64(off + 16, true);
-		const w = view.getFloat64(off + 24, true);
-		const h = view.getFloat64(off + 32, true);
-		const angle = view.getFloat64(off + 40, true);
-		const joint_cnt = view.getUint32(off + 56, true);
-		let joints = [];
-		for (let j = 0; j < joint_cnt; j++)
-			joints.push(view.getInt32(off + 48 + j * 4, true));
+	glCreateBuffer() {
+		return add_object(gl.createBuffer());
+	},
 
-		const blocks = [
-			{ "circle": false, "color": "#00be01" },
-			{ "circle": true , "color": "#00be01" },
-			{ "circle": false, "color": "#f9da2f" },
-			{ "circle": true , "color": "#f9892f" },
-			{ "circle": false, "color": "#ff6666" },
-			{ "circle": true , "color": "#ff6666" },
-			{ "circle": true , "color": "#0a69fd" },
-			{ "circle": true , "color": "#fc8003" },
-			{ "circle": true , "color": "#d147a5" },
-			{ "circle": false, "color": "#0000ff" },
-			{ "circle": false, "color": "#6b3400" }
-		];
-		const circle = blocks[type].circle;
-		const color = blocks[type].color;
+	glCreateProgram() {
+		return add_object(gl.createProgram());
+	},
 
-		ctx.fillStyle = color;
-		ctx.beginPath();
-		if (circle) {
-			ctx.arc(x, y, w / 2, 0, Math.PI * 2, true);
+	glCreateShader(type) {
+		return add_object(gl.createShader(type));
+	},
+
+	glDeleteShader(shader) {
+		gl.deleteShader(get_object(shader));
+	},
+
+	glDisableVertexAttribArray(index) {
+		gl.disableVertexAttribArray(index);
+	},
+
+	glDrawArrays(mode, first, count) {
+		gl.drawArrays(mode, first, count);
+	},
+
+	glDrawElements(mode, count, type, offset) {
+		gl.drawElements(mode, count, type, offset);
+	},
+
+	glEnableVertexAttribArray(index) {
+		gl.enableVertexAttribArray(index);
+	},
+
+	glGetAttribLocation(program, name) {
+		return gl.getAttribLocation(get_object(program), make_cstring(name));
+	},
+
+	glGetProgramParameter(program, pname) {
+		return gl.getProgramParameter(get_object(program), pname);
+	},
+
+	glGetShaderParameter(shader, pname) {
+		return gl.getShaderParameter(get_object(shader), pname);
+	},
+
+	glLinkProgram(program) {
+		gl.linkProgram(get_object(program));
+	},
+
+	glShaderSource(shader, count, string, length) {
+		let strings = [];
+		let lengths = [];
+		let string_view = new DataView(inst.exports.memory.buffer, string);
+
+		if (length == 0) {
+			for (let i = 0; i < count; i++) {
+				let str = string_view.getUint32(i * 4, true);
+				let len = inst.exports.strlen(str);
+				lengths.push(len);
+			}
 		} else {
-			const sina = Math.sin(angle);
-			const cosa = Math.cos(angle);
-			const wc = Math.max(4, w) * cosa / 2;
-			const ws = Math.max(4, w) * sina / 2;
-			const hc = Math.max(4, h) * cosa / 2;
-			const hs = Math.max(4, h) * sina / 2;
-			ctx.moveTo( wc - hs + x,  ws + hc + y);
-			ctx.lineTo(-wc - hs + x, -ws + hc + y);
-			ctx.lineTo(-wc + hs + x, -ws - hc + y);
-			ctx.lineTo( wc + hs + x,  ws - hc + y);
+			/* TODO */
 		}
-		ctx.fill();
-	}}, 10);
+
+		for (let i = 0; i < count; i++) {
+			let str = string_view.getUint32(i * 4, true);
+			strings.push(make_string(str, lengths[i]));
+		}
+
+		let source = strings.join("");
+		gl.shaderSource(get_object(shader), source);
+	},
+
+	glUseProgram(program) {
+		gl.useProgram(get_object(program));
+	},
+
+	glVertexAttribPointer(index, size, type, normalized, stride, pointer) {
+		gl.vertexAttribPointer(index, size, type, normalized, stride, pointer);
+	},
+
+	glViewport(x, y, width, height) {
+	},
+
+	set_interval(func, delay, arg) {
+		return setInterval(inst.exports.call, delay, func, arg);
+	},
+
+	clear_interval(id) {
+		clearInterval(id);
+	},
+
+	print_slice(str, len) {
+		console.log(make_string(str, len));
+	},
+
+	printf(fmt, args) {
+		let fmt_view = new DataView(inst.exports.memory.buffer, fmt);
+		let arg_view = new DataView(inst.exports.memory.buffer, args);
+		let res = [];
+		let i = 0;
+		let a = 0;
+
+		while (true) {
+			let c = fmt_view.getUint8(i);
+			if (c == 37) { // %
+				i++;
+				let cc = fmt_view.getUint8(i);
+				if (cc == 100) { // d
+					let d = arg_view.getInt32(a, true);
+					res.push(d.toString());
+					a += 4;
+				} else if (cc == 102) { // f
+					a += (-a) & 7;
+					let f = arg_view.getFloat64(a, true);
+					res.push(f.toString());
+					a += 8;
+				} else if (cc == 117) { // u
+					let u = arg_view.getUint32(a, true);
+					res.push(u.toString());
+					a += 4;
+				}
+			} else if (!c) {
+				break;
+			} else {
+				res.push(String.fromCharCode(c));
+			}
+			i++;
+		}
+
+		console.log(res.join(""));
+	}
+};
+
+let import_object = {
+	env: gl_env,
+};
+
+function canvas_draw(timestamp)
+{
+	var width  = canvas.clientWidth;
+	var height = canvas.clientHeight;
+	if (canvas.width != width || canvas.height != height) {
+		canvas.width = width;
+		canvas.height = height;
+		gl.viewport(0, 0, width, height);
+		inst.exports.resize(width, height);
+	}
+	inst.exports.draw();
+	window.requestAnimationFrame(canvas_draw);
 }
 
-main();
+function to_key(code)
+{
+	if (code == "Space") return 65;
+	if (code == "KeyR") return 27;
+	if (code == "KeyM") return 58;
+	if (code == "KeyS") return 39;
+	if (code == "KeyD") return 40;
+}
+
+function canvas_keydown(event)
+{
+	inst.exports.key_down(to_key(event.code));
+}
+
+function canvas_keyup(event)
+{
+	inst.exports.key_up(to_key(event.code));
+}
+
+function canvas_mousedown(event)
+{
+	inst.exports.button_down(1);
+}
+
+function canvas_mouseup(event)
+{
+	inst.exports.button_up(1);
+}
+
+function canvas_mousemove(event)
+{
+	inst.exports.move(event.offsetX, event.offsetY);
+}
+
+function canvas_wheel(event)
+{
+	inst.exports.scroll(-0.02 * event.deltaY);
+}
+
+function module_instantiated(module)
+{
+	inst = module.instance;
+	inst.exports.init();
+	inst.exports.resize(canvas.width, canvas.height);
+	window.requestAnimationFrame(canvas_draw);
+	addEventListener("keydown", canvas_keydown);
+	addEventListener("keyup", canvas_keyup);
+	canvas.addEventListener("mousedown", canvas_mousedown);
+	canvas.addEventListener("mouseup", canvas_mouseup);
+	canvas.addEventListener("mousemove", canvas_mousemove);
+	canvas.addEventListener("wheel", canvas_wheel);
+}
+
+let module_promise = WebAssembly.instantiateStreaming(
+	fetch("fcsim.wasm"), import_object
+);
+
+module_promise.then(module_instantiated);
